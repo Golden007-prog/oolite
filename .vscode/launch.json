@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Oolite (gdb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/meson_debug/oolite.app/oolite",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/meson_debug/oolite.app",
+            "environment": [],
+            "externalConsole": false,
+            "preLaunchTask": "oolite: build debug (setup+compile)",
+            "MIMode": "gdb",
+            "setupCommands": [
+                { "description": "Enable pretty-printing", "text": "-enable-pretty-printing", "ignoreFailures": true },
+                { "description": "ostep: step into ObjC message sends", "text": "source ${workspaceFolder}/.vscode/oostep.py", "ignoreFailures": true },
+                { "description": "Don't stop on SIGPIPE", "text": "handle SIGPIPE nostop noprint pass", "ignoreFailures": true }
+            ]
+        },
+        {
+            "name": "Debug Oolite (lldb)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/meson_debug/oolite.app/oolite",
+            "args": [],
+            "cwd": "${workspaceFolder}/build/meson_debug/oolite.app",
+            "preLaunchTask": "oolite: build debug (setup+compile)"
+        },
+        {
+            "name": "Run Oolite (dev build, no rebuild)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/meson_dev/oolite.app/oolite",
+            "args": [],
+            "cwd": "${workspaceFolder}/build/meson_dev/oolite.app",
+            "MIMode": "gdb"
+        }
+    ]
+}

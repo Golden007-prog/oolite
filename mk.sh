@@ -125,6 +125,7 @@ show_help() {  # Script Help Menu
     echo -e "  \033[36m--compile-flags=\"...\"\033[0m          Pass additional arguments directly to 'meson compile'"
     echo -e "  \033[36m--configure-flags=\"...\"\033[0m        Pass additional arguments directly to 'meson configure'"
     echo -e "  \033[36m--install-flags=\"...\"\033[0m          Pass additional arguments directly to 'meson install'"
+    echo -e "  \033[36m--breakpoints\033[0m                 Build with -O0 and debug symbols so breakpoints work (setup/build)"
     echo -e "  \033[36m--native-file=\"...\"\033[0m            Specify native file (defaults to clang.ini)"
     echo -e "  \033[36m--ver-full=\"...\"\033[0m               Specify full version string"
     echo -e "  \033[36m--buildtime=\"...\"\033[0m              Specify build time"
@@ -176,7 +177,7 @@ execute_target() {  # Target Execution Logic
             elif [[ "$build_type" == "dev" ]]; then
                 meson_setup "dev" "-Ddev_release=true" "-Ddebug=false" "-Dstrip_bin=false"
             elif [[ "$build_type" == "debug" ]]; then
-                meson_setup "debug" "-Ddebug=true" "-Dstrip_bin=false"
+                meson_setup "debug" "-Ddebug=true" "-Doptimization=0" "-Dstrip_bin=false"
             fi
             ;;
         compile)
@@ -311,6 +312,11 @@ while [[ $# -gt 0 ]]; do
         --install-flags=*)
             read -r -a flags_array <<< "${1#*=}"
             INSTALL_FLAGS+=("${flags_array[@]}")
+            shift
+            ;;
+        --breakpoints)
+            # No optimisation, symbols kept, no LTO/strip: lines map 1:1 so breakpoints bind
+            SETUP_FLAGS+=("-Doptimization=0" "-Ddebug=true" "-Dstrip_bin=false" "-Db_lto=false")
             shift
             ;;
         --native-file=*)

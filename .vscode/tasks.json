@@ -1,0 +1,58 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "oolite: build debug (setup+compile)",
+            "type": "shell",
+            "command": "./mk.sh build debug",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["relative", "${workspaceFolder}/build/meson_debug"]
+            }
+        },
+        {
+            "label": "oolite: compile debug",
+            "type": "shell",
+            "command": "./mk.sh compile debug",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["relative", "${workspaceFolder}/build/meson_debug"]
+            }
+        },
+        {
+            "label": "oolite: build dev",
+            "type": "shell",
+            "command": "./mk.sh build dev",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": ["relative", "${workspaceFolder}/build/meson_dev"]
+            }
+        },
+        {
+            "label": "oolite: build deployment",
+            "type": "shell",
+            "command": "./mk.sh build deployment",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build"
+        },
+        {
+            "label": "oolite: test dev",
+            "type": "shell",
+            "command": "./mk.sh build dev && ./mk.sh test dev",
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "test"
+        },
+        {
+            "label": "oolite: clean debug",
+            "type": "shell",
+            "command": "./mk.sh clean debug",
+            "options": { "cwd": "${workspaceFolder}" }
+        }
+    ]
+}
