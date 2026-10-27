@@ -133,6 +133,9 @@ class Session:
             m = re.search(e.version_re, self._run(e.version_cmd + " 2>&1") or "")
             self.version = m[0] if m else ""
         self._make_probes()
+        if e.session == "XWayland" and self.backend is not None:
+            # XWayland generates the key repeat itself (from KWin's fake-input keys too), as release + press pairs: off, as in the X11 sessions
+            self.backend.autorepeat_off()
         if e.headed and self.backend is not None:   # the host window manager may resize KWin's window: the output is what XWayland reports
             self.primary = window_probes.primary_monitor(self.backend.monitors()) or self.primary
         return self
@@ -192,11 +195,6 @@ class Session:
         if self.env.keys == "fakeinput": return fakeinput.tap(key)
         (self.backend or window_probes.XToolsBackend(dict(os.environ))).send_key(key, window)
 
-    def hold_time(self, seconds):
-        """How long to hold a key. XTEST keys must last a frame of the slow software-GL game; KWin fake-input keys are events that are never
-        missed, and holding one past ~0.6 s starts the key repeat (F12 then toggles about 10 times), so they are only tapped."""
-        return min(seconds, 0.3) if self.env.keys == "fakeinput" else seconds
-
     def key_down(self, key):
         if self.env.keys == "fakeinput": return fakeinput.key_down(key)
         (self.backend or window_probes.XToolsBackend(dict(os.environ))).key_down(key)
@@ -205,7 +203,28 @@ class Session:
         if self.env.keys == "fakeinput": return fakeinput.key_up(key)
         (self.backend or window_probes.XToolsBackend(dict(os.environ))).key_up(key)
 
+    # ---- mouse (XTEST through xdotool, or KWin fake-input where the keys need it)
+    def mouse_ok(self):
+        return not self.env.mouse_na
+
+    def mouse_move(self, x, y):
+        """Put the pointer at (x, y) in the game window's own pixels, the same coordinates as a screenshot of it."""
+        if self.env.keys == "fakeinput":   # fake-input takes output coordinates: the window's position on the output plus (x, y)
+            g = self.backend.abs_geom(self.window_id()) if self.backend else None
+            if not g: raise SessionError("fake input: cannot find the game window's position for a mouse move")
+            return fakeinput.mouse_move(g[0] + x, g[1] + y)
+        (self.backend or window_probes.XToolsBackend(dict(os.environ))).mouse_move(self.window_id(), x, y)
+
+    def mouse_down(self):
+        if self.env.keys == "fakeinput": return fakeinput.mouse_down()
+        (self.backend or window_probes.XToolsBackend(dict(os.environ))).mouse_down()
+
+    def mouse_up(self):
+        if self.env.keys == "fakeinput": return fakeinput.mouse_up()
+        (self.backend or window_probes.XToolsBackend(dict(os.environ))).mouse_up()
+
     def stop(self):
+        if self.env.keys == "fakeinput": fakeinput.close()
         for p, _ in self.probes: p.close()
         for p in reversed(self.procs):
             try: os.killpg(p.pid, 15)
