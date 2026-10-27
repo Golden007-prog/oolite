@@ -1,0 +1,39 @@
+FROM lscr.io/linuxserver/webtop:ubuntu-kde
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Install system dependencies, python bindings, and a native desktop calculator
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-venv \
+    python3-dbus \
+    pkg-config \
+    libdbus-1-dev \
+    libxtst-dev \
+    libpng-dev \
+    galculator \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Build Python virtual environment inheriting system dbus bindings
+ENV VIRTUAL_ENV=/opt/automation_env
+RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install automation framework modules (including dbus-python and xlib)
+RUN pip install --no-cache-dir pyautogui pillow dbus-python python-xlib
+
+# 3. Global KWin Permission Overrides for Webtop environment context
+ENV KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+ENV KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1
+
+WORKDIR /app
+# Copy the updated automation script
+COPY automate.py /app/automate.py
+
+# 4. Webtop init orchestration (Setting script to run under the correct user)
+# Webtop maps its home directory to /config and runs desktop sessions as the 'abc' user.
+RUN mkdir -p /config/.config/autostart-scripts/ && \
+    echo '#!/bin/bash\nsleep 5\n/opt/automation_env/bin/python3 /app/automate.py' > /config/.config/autostart-scripts/run_automation.sh && \
+    chmod +x /config/.config/autostart-scripts/run_automation.sh && \
+    chown -R abc:abc /config/.config

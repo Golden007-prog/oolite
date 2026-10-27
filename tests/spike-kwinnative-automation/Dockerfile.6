@@ -1,0 +1,48 @@
+FROM lscr.io/linuxserver/webtop:ubuntu-kde
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Install system dependencies, native python tkinter bindings, grim, and galculator
+RUN apt-get update 
+RUN apt-get install -y \
+    python3-pip \
+    python3-venv \
+    python3-dbus \
+    python3-tk \
+    pkg-config \
+    libdbus-1-dev \
+    libxtst-dev \
+    libpng-dev \
+    galculator \
+    grim \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Build Python virtual environment inheriting system dbus bindings
+ENV VIRTUAL_ENV=/opt/automation_env
+RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install automation framework modules
+RUN pip install --no-cache-dir pyautogui pillow dbus-python python-xlib mss
+
+# 3. Global KWin Permission Overrides for Webtop environment context
+ENV KWIN_WAYLAND_NO_PERMISSION_CHECKS=1
+ENV KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1
+
+WORKDIR /app
+COPY automate.py /app/automate.py
+
+# 4. Run the script cleanly and cleanly sit idle waiting for host teardown
+RUN mkdir -p /custom-services.d && \
+    echo '#!/usr/bin/with-contenv bash\n\
+    # Wait for the main Webtop display socket to be generated\n\
+    while [ ! -S /tmp/.X11-unix/X1 ]; do sleep 1; done\n\
+    sleep 3\n\
+    echo "[*] Triggering automated testing sequence..."\n\
+    export DISPLAY=:1\n\
+    export XAUTHORITY=/config/.Xauthority\n\
+    HOME=/config /opt/automation_env/bin/python3 /app/automate.py\n\
+    echo "[*] Automation task completed. Signalling host pipeline..."' > /custom-services.d/run_automation && \
+    chmod +x /custom-services.d/run_automation
+

@@ -1,0 +1,49 @@
+FROM ubuntu:26.04
+
+# Prevent interactive prompts during package installations
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies, graphics stack, XWayland, and Tkinter packages
+RUN apt-get update && apt-get install -y \
+    kwin-wayland \
+    xwayland \
+    dbus-x11 \
+    libgl1-mesa-dri \
+    python3.14 \
+    python3.14-venv \
+    python3.14-dev \
+    python3-tk \
+    kcalc \
+    xvfb \
+    xdotool \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up the Python automation virtual environment
+RUN python3.14 -m venv /opt/automation_env
+ENV PATH="/opt/automation_env/bin:$PATH"
+
+# Install core GUI automation libraries
+RUN pip install --no-cache-dir \
+    pyautogui \
+    python-xlib \
+    mouseinfo
+
+# Set up runtime directories for Wayland/X and bypass Xauthority constraints
+ENV XDG_RUNTIME_DIR=/tmp/runtime-dir
+ENV WAYLAND_DISPLAY=wayland-0
+ENV DISPLAY=:1
+ENV XAUTHORITY=/dev/null
+
+RUN mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
+
+# Establish the workspace matching your mounted output structure
+WORKDIR /app
+
+# Spin up a virtual display buffer and launch KWin alongside Xwayland
+CMD ["xvfb-run", "--server-args=-screen 0 1280x1024x24", "dbus-run-session", "kwin_wayland", "--headless", "--xwayland", "--virtual"]
+
+# headless and wait to start
+
+
+CMD ["xvfb-run", "--server-args=-screen 0 1280x1024x24 -ac", "dbus-run-session", "bash", "-c", "kwin_wayland --headless --xwayland --virtual & sleep 3 && python /app/automate.py"]
