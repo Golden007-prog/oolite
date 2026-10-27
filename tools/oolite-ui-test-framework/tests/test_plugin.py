@@ -1,5 +1,6 @@
 """The pytest layer, exercised with pytester: the real game tests (app/ and window/) against FAKE launch fixtures (no display, no game)."""
 import os
+import re
 
 import pytest
 
@@ -100,7 +101,7 @@ def test_raw_file_is_result_compatible_and_has_test_lines(project):
     na = [l for l in res if "build=na" in l][0]
     assert "focus=NA" in na and "t_ok=1" in na
     tests = [l for l in raw if l.startswith("TEST")]
-    assert any("test=test_gets_focus outcome=skipped reason=NOT MEASURABLE" in l for l in tests)
+    assert any(re.search(r"test=test_gets_focus outcome=skipped start=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ secs=[\d.]+ reason=NOT MEASURABLE", l) for l in tests)
     assert any("test=test_has_frame outcome=failed" in l and "build=new" in l for l in tests)
     assert os.path.exists(tmp / "j.xml")
 
@@ -113,6 +114,29 @@ def test_app_only_runs_still_get_a_result_line(project):
     res = [l for l in open(tmp / "out.raw").read().splitlines() if l.startswith("RESULT")]
     assert len(res) == 6 and all("exited=NA" in l for l in res)
     assert all(("renders=0" in l) == ("build=new" in l) for l in res)
+
+
+def test_every_test_function_gets_the_same_case_object(project):
+    """pytest 7 reuses a session fixture only for the identical param (`is`): equal but new Case objects per test function relaunched the
+    shared game before every test on the Debian image."""
+    pt, args, tmp = project
+    items, _ = pt.inline_genitems(*[a for a in args if not a.startswith("--junitxml")])
+    by_run = {}
+    for i in items:
+        c = i.callspec.params["case"]; by_run.setdefault(c.run, set()).add(id(c))
+    assert sorted(by_run) == [1, 2] and all(len(ids) == 1 for ids in by_run.values())
+
+
+def test_shared_launch_tests_run_together_before_private_launches(project):
+    """A private launch suspends the shared one, so in each run every launched_game test comes before the first other test."""
+    pt, args, tmp = project
+    pt.makepyfile(test_private="def test_private_first(case, fresh_game): pass\n")
+    rec = pt.inline_run("--collect-only", *[a for a in args if not a.startswith("--junitxml")])
+    items = rec.getcalls("pytest_collection_finish")[0].session.items   # the final order (inline_genitems gives collection order)
+    for run in (1, 2):
+        shared = ["launched_game" in i.fixturenames for i in items if i.callspec.params["case"].run == run]
+        assert any(shared) and not all(shared) and shared == sorted(shared, reverse=True)
+    assert [i.callspec.params["case"].run for i in items] == sorted(i.callspec.params["case"].run for i in items)
 
 
 @pytest.mark.parametrize("sel,name,count", [(["-m", "family_marco"], "test_has_frame", 2), (["-m", "family_kwin"], "test_has_frame", 0),

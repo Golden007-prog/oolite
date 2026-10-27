@@ -21,6 +21,7 @@ Case = collections.namedtuple("Case", "env label app run")
 class State:
     def __init__(self):
         self.launches = {}; self.toggles = {}; self.outcomes = collections.defaultdict(dict); self.hard = []; self.wmver = {}; self.screen = ""; self.warnings = []
+        self.timing = {}   # (env, build, run, test) -> [start, seconds over setup + call + teardown]
 
 
 STATE = State()
@@ -39,6 +40,7 @@ def pytest_addoption(parser):
     g.addoption("--ui-tol", type=int, default=40)
     g.addoption("--ui-wait", type=float, default=14.0)
     g.addoption("--ui-sample", type=float, default=0.5)
+    g.addoption("--ui-settle", type=float, default=3.0, help="end startup sampling once the window has not changed for this long (0 = sample for --ui-wait)")
     g.addoption("--ui-shots", default="", help="save game-window screenshots (PNG) in this directory")
     g.addoption("--ui-game-arg", action="append", default=[], help="extra argument for the game (repeatable)")
     g.addoption("--ui-logs", default="", help="keep each launch's game log (Latest.log) in this directory")
@@ -56,6 +58,7 @@ def _slug(s):
 
 
 def pytest_configure(config):
+    config.pluginmanager.register(SharedLaunchFirst(), "uitest-shared-launch-first")
     config.addinivalue_line("markers", "only_wm(*names): run only in the named environments / families (WM-specific tests)")
     config.addinivalue_line("markers", "game: needs a display server and the AppImage")
     config.addinivalue_line("markers", "needs_toggle: run only with --ui-toggle (reason recorded as NOT TESTED)")
@@ -84,7 +87,11 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("case", [pytest.param(None, marks=pytest.mark.skip(reason="no --ui-env / --ui-app given"))], ids=["none"], scope="session")
         return
     label = build_label(cfg)
-    cases = [Case(env.name, label, os.path.abspath(app), n) for n in range(1, cfg.getoption("--ui-runs") + 1)]
+    # The same Case objects for every test function: pytest 7 (Debian image) reuses a session fixture only for the identical param
+    # (`is`), so new but equal Cases tore launched_game down and relaunched the game before every test.
+    if not hasattr(cfg, "_uitest_cases"):
+        cfg._uitest_cases = [Case(env.name, label, os.path.abspath(app), n) for n in range(1, cfg.getoption("--ui-runs") + 1)]
+    cases = cfg._uitest_cases
     metafunc.parametrize("case", cases, ids=[pass_fail.case_id(c.env, c.run, env.session) for c in cases], scope="session")
 
 
@@ -113,6 +120,19 @@ def pytest_collection_modifyitems(config, items):
         for m in item.iter_markers("only_wm"):
             if env is None or (env.name not in m.args and env.family not in m.args):
                 item.add_marker(pytest.mark.skip(reason="only for %s" % ", ".join(m.args)))
+
+
+class SharedLaunchFirst:
+    """Within a run, the tests on the shared launch first: a private launch (app, fresh_game) suspends it, so a shared test after one
+    relaunched the game (about 18 s). A plugin of its own so it can run last, after pytest's reordering by parametrised fixture."""
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, items):
+        items.sort(key=lambda i: (_run(i), "launched_game" not in getattr(i, "fixturenames", ())))
+
+
+def _run(item):
+    cs = getattr(item, "callspec", None); c = cs.params.get("case") if cs else None
+    return c.run if c is not None else 0
 
 
 # ---------------------------------------------------------------- fixtures
@@ -149,7 +169,7 @@ def session_mgr(request):
 @pytest.fixture(scope="session")
 def opts(request):
     c = request.config
-    return scenarios.Opts(wait=c.getoption("--ui-wait"), sample=c.getoption("--ui-sample"), tol=c.getoption("--ui-tol"), toggle=c.getoption("--ui-toggle"))
+    return scenarios.Opts(wait=c.getoption("--ui-wait"), sample=c.getoption("--ui-sample"), settle=c.getoption("--ui-settle"), tol=c.getoption("--ui-tol"), toggle=c.getoption("--ui-toggle"))
 
 
 def _launch(request, case, session_mgr, opts, with_toggle):
@@ -215,12 +235,13 @@ def launched_game(request, case, session_mgr, opts):
     key = (case.env, case.label, case.run); s = session_mgr.get()
 
     def start():
-        game = _game(cfg, case, s, "shared").start()
-        rec = scenarios.run_startup(s, game, opts)
+        t0 = time.time(); game = _game(cfg, case, s, "shared").start()
+        rec = scenarios.run_startup(s, game, opts); t1 = time.time()
         crashed = int(game.proc.poll() not in (None, 0) and rec.get("exited") == 1)
         rec.update(wm=case.env, build=case.label, screen=cfg.getoption("--ui-screen"), run=case.run, crashed=crashed)
         rec.setdefault("dx", None); rec.setdefault("dy", None)
         rec.update(_render_fields(s, game, rec, cfg, case))
+        rec.update(start=raw_results.stamp(t0), startup_secs=round(t1 - t0, 1), render_secs=round(time.time() - t1, 1))
         rec = geometry.apply(rec, opts.tol)
         STATE.launches.setdefault(key, rec)          # the first launch is the RESULT line; a relaunch only adds a warning
         return game, rec
@@ -262,8 +283,9 @@ class FreshGame:
         self.request, self.case, self.mgr, self.opts = request, case, mgr, opts
         self.session = mgr.get()
         _only_this_game()
-        self.game = _game(request.config, case, self.session, request.node.originalname).start()
+        t0 = time.time(); self.game = _game(request.config, case, self.session, request.node.originalname).start()
         self.rec = scenarios.run_startup(self.session, self.game, opts)
+        self.rec.update(start=raw_results.stamp(t0), startup_secs=round(time.time() - t0, 1))
         self.crashed = int(self.game.proc.poll() not in (None, 0) and self.rec.get("exited") == 1)
 
     def toggle(self):
@@ -333,6 +355,7 @@ def pytest_runtest_makereport(item, call):
     case = cs.params.get("case") if cs else None
     if case is None: return
     key = (case.env, case.label, case.run); name = item.originalname
+    t = STATE.timing.setdefault(key + (name,), [call.start, 0.0]); t[1] += call.duration
     if rep.when == "call" or (rep.when == "setup" and rep.outcome == "skipped"):
         STATE.outcomes[key][name] = (rep.outcome, _reason(rep) if rep.outcome != "passed" else "")
     elif rep.when == "setup" and rep.outcome == "failed":
@@ -352,7 +375,9 @@ def pytest_sessionfinish(session, exitstatus):
             rec = dict(wm=key[0], build=key[1], screen=STATE.screen, run=key[2], exited=None, dx=None, dy=None)
             lines.append(raw_results.format_result(pass_fail.apply_outcomes(rec, STATE.outcomes[key])))
         for test, (o, why) in sorted(STATE.outcomes.get(key, {}).items()):
-            lines.append("TEST wm=%s build=%s run=%d test=%s outcome=%s reason=%s" % (key[0], key[1], key[2], test, o, why.replace("\n", " ")))
+            start, secs = STATE.timing.get(key + (test,), (None, None))
+            lines.append("TEST wm=%s build=%s run=%d test=%s outcome=%s start=%s secs=%s reason=%s" % (key[0], key[1], key[2], test, o,
+                         raw_results.stamp(start) if start else "NA", "NA" if secs is None else round(secs, 1), why.replace("\n", " ")))
     for env, build, run, text in STATE.warnings: lines.append("WARN wm=%s build=%s run=%d text=%s" % (env, build, run, text))
     for env, screen, build, why in STATE.hard: lines.append("HARD wm=%s screen=%s build=%s reason=%s" % (env, screen, build, why.replace("\n", " ")[:300]))
     with open(path, "a") as f: f.write("\n".join(lines) + "\n")
