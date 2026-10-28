@@ -89,7 +89,8 @@ def test_toggle_gets_its_own_launch(project):
     pt, args, tmp = project
     run_builds(pt, "--ui-toggle", *args)
     log = open(tmp / "launches.log").read().splitlines()
-    assert sum(1 for l in log if l.startswith("fresh")) == 6 and sum(1 for l in log if l.startswith("launch")) == 6
+    # two toggle tests (F12, and F12 with the saved window larger than the screen), each a fresh launch: 2 x 3 builds x 2 runs
+    assert sum(1 for l in log if l.startswith("fresh")) == 12 and sum(1 for l in log if l.startswith("launch")) == 6
 
 
 def test_raw_file_is_result_compatible_and_has_test_lines(project):
@@ -211,3 +212,17 @@ def test_key_driven_tests_run_on_kwin_xwayland_through_fake_input(project):
     args = [a if a != "marco" else "kwin-xwayland" for a in args] + ["--ui-toggle"]
     out = pt.runpytest("-v", "-rs", *args).stdout.str()
     assert "test_f12_toggle[kwin-xwayland" in out and "NOT MEASURABLE: injected keys" not in out
+
+
+def test_a_precondition_failing_in_setup_is_that_tests_failure_not_a_hard_error(project):
+    pt, args, tmp = project
+    pt.makepyfile(test_pre=(
+        "import pytest\n"
+        "from oolite_ui_test_framework import preconditions\n"
+        "@pytest.fixture\n"
+        "def needs_tool(case): preconditions.require('input_tool', 'xdotool is not installed in this image')\n"
+        "def test_keys(needs_tool): pass\n"))
+    out = pt.runpytest(*args, "--ui-label", "base", "-k", "test_keys").stdout.str()
+    tests = [l for l in open(tmp / "out.raw").read().splitlines() if l.startswith("TEST") and "test=test_keys" in l]
+    assert tests and all("outcome=failed" in l and "reason=PRECONDITION input_tool: xdotool is not installed" in l for l in tests), out
+    assert "setup failed" not in out
