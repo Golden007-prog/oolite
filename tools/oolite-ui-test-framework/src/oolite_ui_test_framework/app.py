@@ -11,7 +11,7 @@ while the window is blank, frozen or transparent fails here. Waits return as soo
 import os
 import time
 
-from . import png, render_check, screen
+from . import game_log, png, preconditions, render_check, screen
 from .ui import pages
 
 
@@ -81,16 +81,21 @@ class App:
         menu once per frame while a key is down (its own repeat is 0.2 s, shorter than a software-rendered frame), so a fixed hold moved
         0 rows or several depending on the frame rate. That needs a look quicker than the game's repeat: where one look takes longer
         (native KWin grabs through D-Bus, 0.5-1.4 s) the key stayed down through several repeats and the highlight ran past the row and
-        wrapped round. There the key is tapped for `tap` seconds (0 or 1 rows) and looked at after each tap, for up to `slow_cap` seconds.
-        Returns whether cond() became true."""
+        wrapped round. There the key is tapped and looked at after each tap, for up to `slow_cap` seconds. A tap shorter than one frame
+        is never seen (down and up arrive in the same frame: a 3836x1053 window under sway, #42), so each tap the game ignored is held
+        twice as long as the one before, starting at `tap` seconds. The tap that worked is remembered for the next press: how long it has
+        to be depends on the frame time (window size, software rendering, machine load), not on the window manager, so it is measured
+        rather than configured. Returns whether cond() became true."""
         t0 = self.clock.monotonic()
         if cond(): return True
         if self.clock.monotonic() - t0 > self.GAME_KEY_REPEAT / 2:
+            tap = max(tap, getattr(self, "_tap", 0))
             while self.clock.monotonic() - t0 < slow_cap:
                 self.session.key_down(key)
                 try: self.clock.sleep(tap)
                 finally: self.session.key_up(key)
-                if cond(): return True
+                if cond(): self._tap = tap; return True
+                tap *= 2
             return False
         self.session.key_down(key)
         try:
@@ -108,7 +113,8 @@ class App:
         """Point at (x, y) in window pixels and hold button 1 until cond() is true, then release it; at most `cap` seconds. The game reads the
         mouse once per frame like the keys, and works out which row is under the pointer when it draws, so the pointer is left there for
         `settle` seconds before the press. A held click does not repeat (unlike a key), so holding it for several frames is harmless.
-        Returns whether cond() became true."""
+        Returns whether cond() became true. Fails as PRECONDITION window_size_as_requested in a window not the size the game asked for."""
+        self._check_window_size()
         self.session.mouse_move(x + 1, y); self.session.mouse_move(x, y)     # two moves: the game ignores the first motion after it warps the pointer
         self.clock.sleep(settle)
         t0 = self.clock.monotonic()
@@ -121,14 +127,16 @@ class App:
         finally:
             self.session.mouse_up()
 
+    def _check_window_size(self):
+        """The game maps the pointer with the window size it asked for, so a window the window manager resized gets clicks in the wrong place (#42)."""
+        req = next((r for r in (preconditions.requested_window(t) for n, t in game_log.texts(self.game) if n == "Latest.log") if r), None)
+        if req is None: return
+        s = self.last or self.screenshot()
+        preconditions.check("window_size_as_requested", preconditions.window_size_as_requested(req, s and (s.w, s.h)))
+
     def keys_received(self, flush=2.5):
         """How many key presses the game has logged so far (scenarios.add_key_logging turns that on), after waiting `flush` seconds: the game
         writes its log at most every 2 s. None when there is no game log to read."""
-        d = getattr(self.game, "dir", None)
-        if not d: return None
+        if not getattr(self.game, "dir", None): return None
         self.clock.sleep(flush)
-        for root, _, files in os.walk(d):
-            if "Latest.log" in files:
-                try: return sum("Keydown scancode" in l for l in open(os.path.join(root, "Latest.log"), errors="replace"))
-                except OSError: return None
-        return None
+        return game_log.keydowns(self.game)
